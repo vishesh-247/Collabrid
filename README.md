@@ -88,20 +88,19 @@ cd collabrid
 2️⃣ Backend Setup
 cd server
 npm install
-cp .env.example .env
-
-
-3️⃣ Frontend Setup
-cd ../client
-npm install
-
-REACT_APP_BACKEND_URL=http://localhost:5000
-
 
 Update .env with your values:
 PORT=5000
 MONGODB_URI=mongodb://localhost:27017/collabrid
 JWT_SECRET=your-super-secret-jwt-key
+
+
+3️⃣ Frontend Setup
+cd client
+npm install
+
+Update .env with your values:
+REACT_APP_BACKEND_URL=http://localhost:5000
 
 
 🚀 Usage
@@ -146,7 +145,8 @@ collabrid/
 │   │   ├── Actions.js      # Socket action constants
 │   │   ├── Socket.js       # Socket setup
 │   │   └── App.js
-│   └── package.json
+│   └── .env
+    └── package.json
 ├── server/                 # Node.js backend
 │   ├── models/
 │   │   └── User.js
