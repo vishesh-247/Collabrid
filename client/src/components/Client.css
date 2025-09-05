@@ -1,0 +1,35 @@
+/* Client.css - Minimal Version */
+.client-item {
+  display: flex;
+  align-items: center;
+  margin-bottom: 1rem;
+  padding: 0.75rem;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  transition: all 0.2s ease;
+}
+
+.client-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.client-item.collapsed {
+  justify-content: center;
+  padding: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.client-avatar {
+  flex-shrink: 0;
+}
+
+.client-name {
+  margin-left: 0.875rem;
+  font-weight: 500;
+  font-size: 0.95rem;
+  color: #ffffff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 120px;
+}
