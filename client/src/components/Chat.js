@@ -1,5 +1,4 @@
-// ==================== CLIENT/Chat.js ====================
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import './Chat.css';
 import { ACTIONS } from '../Actions';
 
@@ -9,60 +8,80 @@ function Chat({ socketRef, roomId, username, isChatOpen, onToggleChat }) {
   const [isTyping, setIsTyping] = useState(false);
   const [typingUsers, setTypingUsers] = useState(new Set());
   const messagesEndRef = useRef(null);
-  const optimisticIdsRef = useRef(new Set()); // track optimistic ids
+  const optimisticIdsRef = useRef(new Set());
+  const typingTimeoutRef = useRef(null);
 
-  useEffect(() => {
-    if (!socketRef?.current) return;
-
-    // DEBUG: connection info
-    console.log('[Chat] socketRef.current.id=', socketRef.current.id);
-
-    // Listen for chat messages from server
-    const onChatMessage = (message) => {
-      console.log('[Chat] received chat-message', message);
-      console.log('[Chat] current optimistic IDs:', Array.from(optimisticIdsRef.current));
-      console.log('[Chat] message from:', message.username, 'current user:', username);
+  // Memoized callback to handle chat messages
+  const handleChatMessage = useCallback((message) => {
+    console.log('Sending message to roomId:', roomId); 
+    console.log('[Chat] received chat-message', message);
+    
+    setMessages((prev) => {
+      // Check if this is a duplicate message
+      const existingMessage = prev.find(m => m.id === message.id);
+      if (existingMessage && !existingMessage.optimistic) {
+        console.log('[Chat] ignoring duplicate message');
+        return prev;
+      }
       
-      setMessages((prev) => {
-        console.log('[Chat] current messages before update:', prev.length);
-        
-        // If server sent an id that we already added optimistically, avoid duplicate:
-        if (message.id && optimisticIdsRef.current.has(message.id)) {
-          console.log('[Chat] replacing optimistic message with server message');
-          optimisticIdsRef.current.delete(message.id);
-          const updatedMessages = prev.map((m) => (m.id === message.id ? { ...message, optimistic: false } : m));
-          console.log('[Chat] after replacing optimistic:', updatedMessages.length);
-          return updatedMessages;
-        }
-        
-        console.log('[Chat] adding new message from another user');
-        const newMessages = [...prev, message];
-        console.log('[Chat] after adding new message:', newMessages.length);
-        return newMessages;
-      });
-    };
+      // If server sent an id that we already added optimistically, replace it
+      if (message.id && optimisticIdsRef.current.has(message.id)) {
+        console.log('[Chat] replacing optimistic message');
+        optimisticIdsRef.current.delete(message.id);
+        return prev.map((m) => 
+          m.id === message.id 
+            ? { ...message, optimistic: false } 
+            : m
+        );
+      }
+      
+      console.log('[Chat] adding new message');
+      return [...prev, message];
+    });
+  }, []);
 
-    // Listen for typing indicators
-    const onUserTyping = ({ username: typingUser, isTyping: typing }) => {
-      console.log('[Chat] received user-typing', typingUser, typing);
-      setTypingUsers((prev) => {
-        const newSet = new Set(prev);
-        if (typing) newSet.add(typingUser);
-        else newSet.delete(typingUser);
-        return newSet;
-      });
-    };
+  // Memoized callback to handle typing indicators
+  const handleUserTyping = useCallback(({ username: typingUser, isTyping: typing }) => {
+    console.log('[Chat] received user-typing', typingUser, typing);
+    setTypingUsers((prev) => {
+      const newSet = new Set(prev);
+      if (typing) {
+        newSet.add(typingUser);
+      } else {
+        newSet.delete(typingUser);
+      }
+      return newSet;
+    });
+  }, []);
 
-    socketRef.current.on(ACTIONS.CHAT_MESSAGE, onChatMessage);
-    socketRef.current.on(ACTIONS.USER_TYPING, onUserTyping);
+  // Set up socket listeners
+  useEffect(() => {
+    if (!socketRef?.current) {
+      console.log('[Chat] No socket reference available');
+      return;
+    }
+
+    const socket = socketRef.current;
+    console.log('[Chat] Setting up socket listeners, socket ID:', socket.id);
+
+    // Remove any existing listeners to prevent duplicates
+    socket.off(ACTIONS.CHAT_MESSAGE, handleChatMessage);
+    socket.off(ACTIONS.USER_TYPING, handleUserTyping);
+
+    // Add new listeners
+    socket.on(ACTIONS.CHAT_MESSAGE, handleChatMessage);
+    socket.on(ACTIONS.USER_TYPING, handleUserTyping);
 
     return () => {
-      if (!socketRef?.current) return;
-      socketRef.current.off(ACTIONS.CHAT_MESSAGE, onChatMessage);
-      socketRef.current.off(ACTIONS.USER_TYPING, onUserTyping);
+      console.log('[Chat] Cleaning up socket listeners');
+      if (socket) {
+        socket.off(ACTIONS.CHAT_MESSAGE, handleChatMessage);
+        socket.off(ACTIONS.USER_TYPING, handleUserTyping);
+      }
     };
-  }, [socketRef]);
+  }, [socketRef.current, handleChatMessage, handleUserTyping]);
 
+  // Auto-scroll to bottom when messages change
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
@@ -71,62 +90,91 @@ function Chat({ socketRef, roomId, username, isChatOpen, onToggleChat }) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  const handleSendMessage = (e) => {
+  const handleSendMessage = useCallback((e) => {
     if (e) e.preventDefault();
     if (!newMessage.trim() || !socketRef?.current) return;
 
-    // create optimistic message with id (matching server format)
+    const trimmedMessage = newMessage.trim();
+    
+    // Create optimistic message with unique ID
     const optimisticId = `${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
     const optimisticMsg = {
       id: optimisticId,
       type: 'message',
       username,
-      message: newMessage.trim(),
+      message: trimmedMessage,
       timestamp: new Date().toISOString(),
-      optimistic: true // flag to help debugging
+      optimistic: true
     };
 
-    // Optimistically show message immediately
+    // Add to optimistic IDs tracking
     optimisticIdsRef.current.add(optimisticId);
+    
+    // Optimistically show message immediately
     setMessages(prev => [...prev, optimisticMsg]);
     
-    // send to server
-    console.log('[Chat] emitting chat-message', { roomId, message: newMessage.trim() });
+    // Send to server
+    console.log('[Chat] emitting chat-message', { 
+      roomId, 
+      message: trimmedMessage, 
+      optimisticId 
+    });
+    
     socketRef.current.emit(ACTIONS.CHAT_MESSAGE, {
       roomId,
-      message: newMessage.trim(),
-      optimisticId // Send the optimistic ID to server
+      message: trimmedMessage,
+      optimisticId
     });
 
-    // clear input and stop typing
+    // Clear input and stop typing
     setNewMessage('');
     handleStopTyping();
-    
-    // Scroll after a brief delay to ensure message is rendered
-    setTimeout(scrollToBottom, 50);
-  };
+  }, [newMessage, socketRef, roomId, username]);
 
-  const handleTyping = () => {
-    if (!isTyping && socketRef?.current) {
+  const handleTyping = useCallback(() => {
+    if (!socketRef?.current) return;
+    
+    if (!isTyping) {
       setIsTyping(true);
       socketRef.current.emit(ACTIONS.USER_TYPING, { roomId, isTyping: true });
-      
-      // auto-stop typing after a short window if user doesn't continue
-      setTimeout(() => {
-        setIsTyping(false);
-        if (socketRef?.current) {
-          socketRef.current.emit(ACTIONS.USER_TYPING, { roomId, isTyping: false });
-        }
-      }, 2500);
     }
-  };
+    
+    // Clear existing timeout
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+    
+    // Set new timeout to stop typing
+    typingTimeoutRef.current = setTimeout(() => {
+      setIsTyping(false);
+      if (socketRef?.current) {
+        socketRef.current.emit(ACTIONS.USER_TYPING, { roomId, isTyping: false });
+      }
+    }, 2500);
+  }, [isTyping, socketRef, roomId]);
 
-  const handleStopTyping = () => {
+  const handleStopTyping = useCallback(() => {
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+    
     if (isTyping && socketRef?.current) {
       setIsTyping(false);
       socketRef.current.emit(ACTIONS.USER_TYPING, { roomId, isTyping: false });
     }
-  };
+  }, [isTyping, socketRef, roomId]);
+
+  const handleInputChange = useCallback((e) => {
+    setNewMessage(e.target.value);
+    handleTyping();
+  }, [handleTyping]);
+
+  const handleKeyDown = useCallback((e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSendMessage(e);
+    }
+  }, [handleSendMessage]);
 
   const formatTime = (timestamp) => {
     return new Date(timestamp).toLocaleTimeString([], {
@@ -134,6 +182,9 @@ function Chat({ socketRef, roomId, username, isChatOpen, onToggleChat }) {
       minute: '2-digit'
     });
   };
+
+  // Filter out current user from typing users
+  const otherTypingUsers = Array.from(typingUsers).filter(user => user !== username);
 
   return (
     <div className={`chat-container ${isChatOpen ? 'open' : ''}`}>
@@ -164,8 +215,11 @@ function Chat({ socketRef, roomId, username, isChatOpen, onToggleChat }) {
                   <span className="message-time">{formatTime(msg.timestamp)}</span>
                 </div>
                 <div className="message-text">{msg.message}</div>
-                {/* indicate optimistic until confirmed */}
-                {msg.optimistic && <div style={{fontSize:10,opacity:0.6}}>sending…</div>}
+                {msg.optimistic && (
+                  <div style={{fontSize: 10, opacity: 0.6, color: '#999'}}>
+                    sending...
+                  </div>
+                )}
               </div>
             )}
             {msg.type === 'notification' && (
@@ -179,14 +233,14 @@ function Chat({ socketRef, roomId, username, isChatOpen, onToggleChat }) {
         <div ref={messagesEndRef} />
       </div>
 
-      {typingUsers.size > 0 && (
+      {otherTypingUsers.length > 0 && (
         <div className="typing-indicator">
           <div className="typing-dots">
             <span></span><span></span><span></span>
           </div>
           <span className="typing-text">
-            {Array.from(typingUsers).filter(user => user !== username).join(', ')} {' '}
-            {Array.from(typingUsers).filter(user => user !== username).length === 1 ? 'is' : 'are'} typing...
+            {otherTypingUsers.join(', ')} {' '}
+            {otherTypingUsers.length === 1 ? 'is' : 'are'} typing...
           </span>
         </div>
       )}
@@ -196,17 +250,9 @@ function Chat({ socketRef, roomId, username, isChatOpen, onToggleChat }) {
           <input
             type="text"
             value={newMessage}
-            onChange={(e) => {
-              setNewMessage(e.target.value);
-              handleTyping();
-            }}
+            onChange={handleInputChange}
             onBlur={handleStopTyping}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                handleSendMessage(e);
-              }
-            }}
+            onKeyDown={handleKeyDown}
             placeholder="Type a message..."
             className="form-control chat-input"
             maxLength={500}
