@@ -3,8 +3,10 @@
     -Made by Vishesh Jain
     -SRM Institute of Science and Technology, Kattankulathur
 
-> A powerful and modern real-time collaborative code editor with chat, authentication, and code execution support.
+> A powerful and modern real-time collaborative code editor with chat, authentication and private sessions support.
 
+>DEMO
+https://github.com/user-attachments/assets/45d420ac-501d-4c32-90e8-ecd136eb3fcf
 ---
 
 ## ✨ Features
